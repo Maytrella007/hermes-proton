@@ -1,0 +1,74 @@
+name: hermes-proton
+version: 0.26.1
+description: >
+  Proton Mail for Hermes. Reads and sends mail through Proton's own API — no
+  Proton Bridge and no paid plan required — using an MIT-licensed client written
+  from Proton's own open-source Go libraries. Sending is refused unless a
+  recipient allowlist is configured. Sign in once, either with
+  `hermes proton login` or by asking the agent: the password is read from a
+  one-time local file and deleted, never typed into a chat, and Proton's
+  verification page is completed by a person. Several accounts can be signed in
+  at once; with more than one, a tool call that does not name an account is
+  refused rather than guessed.
+author: Maytrella007
+kind: standalone
+platforms:
+  - linux
+  - macos
+python_dependencies:
+  - "PGPy13>=0.6.1rc1,<0.7"
+  - "bcrypt>=4.0,<6"
+  - "requests>=2.28,<3"
+provides_tools:
+  - proton_login
+  - proton_accounts
+  - proton_unread
+  - proton_list
+  - proton_read
+  - proton_send
+  - proton_draft
+  - proton_mark
+  - proton_delete
+  - proton_get_attachment
+  - proton_search
+  - proton_gather_context
+  - proton_labels
+  - proton_calendar
+  - proton_contacts
+  - proton_contact
+  - proton_drive_list
+  - proton_drive_download
+  - proton_drive_create_folder
+  - proton_drive_upload
+  - proton_drive_move
+  - proton_drive_rename
+  - proton_drive_delete
+  - proton_drive_share
+  - proton_drive_unshare
+  - proton_create_event
+  - proton_cancel_event
+  - proton_create_contact
+  - proton_edit_contact
+  - proton_delete_contact
+  - proton_rsvp
+  - proton_edit_event
+  - proton_label
+  - proton_schedule_followup
+  - proton_storage
+  - proton_empty
+  - proton_manage_label
+provides_cli:
+  - proton
+optional_env:
+  - name: PROTON_PASSWORD_FILE
+    description: "One-time file the sign-in reads the account password from and then deletes (default: next to the session file). Never put the password in an env var: anything the agent runs in a terminal would see it."
+    prompt: "Password file path"
+    password: false
+  - name: PROTONLITE_HOME
+    description: "Directory holding the per-account session files (default: ~/.config/protonlite)"
+    prompt: "Session directory"
+    password: false
+  - name: PROTON_ALLOWED_RECIPIENTS
+    description: "Comma-separated addresses the agent may email; globs like *@acme.com allowed. Sending is refused while this is empty."
+    prompt: "Allowed recipients"
+    password: false
