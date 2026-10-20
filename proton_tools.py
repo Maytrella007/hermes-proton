@@ -33,12 +33,7 @@ from typing import Any
 from protonlite import calendar as _calendar, htmltext
 from protonlite.accounts import AccountStore, default_root
 from protonlite.client import SYSTEM_LABELS, ProtonMail
-from protonlite.errors import (
-    HumanVerificationRequired,
-    ProtonError,
-    SessionExpired,
-    TwoFactorRequired,
-)
+from protonlite.errors import ProtonError, SessionExpired
 
 TOOLSET = "proton_mail"
 #: The acting tools (send, delete, schedule) live in their own toolset so a
@@ -48,8 +43,6 @@ TOOLSET_WRITE = "proton_mail_write"
 
 #: Comma-separated recipients the agent may write to. Globs allowed: ``*@acme.com``.
 ALLOWLIST_ENV = "PROTON_ALLOWED_RECIPIENTS"
-#: A one-time file holding the account password, consumed by the sign-in.
-PASSWORD_FILE_ENV = "PROTON_PASSWORD_FILE"
 #: Longest body handed to the model before it gets truncated.
 BODY_LIMIT = 20_000
 #: Largest single attachment to read and send (Proton caps the total near 25 MB).
@@ -571,50 +564,34 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
 PROTON_LOGIN_SCHEMA = _schema(
     "proton_login",
     "Sign in to Proton Mail so the other proton_* tools start working. You never handle "
-    "the account password: it is read from a one-time local file the person prepares, and "
-    "destroyed once the sign-in succeeds. Signing in from a server almost always means "
-    "Proton asks a *person* to complete a verification page first, and this tool hands you "
-    "that link. Pass the link on unchanged, wait until they say they finished it, then call "
-    "this tool again with the verification_token it gave you. Never try to complete that "
-    "page yourself, and never ask anyone to type their password into a chat.",
+    "the account password: sign-in runs in a terminal, where the person types it into a "
+    "prompt that does not echo. Call this with the address and it returns the exact command "
+    "for them to run (`hermes proton login`); that command also walks them through Proton's "
+    "verification page and any authenticator code, and saves the session. Never ask anyone "
+    "to type their password into a chat; if they offer, decline and point them to the "
+    "terminal.",
     {
         "address": {"type": "string", "description": "The Proton address to sign in as."},
-        "verification_token": {
-            "type": "string",
-            "description": "Only on the second call, once the person completed the page.",
-        },
-        "totp_code": {
-            "type": "string",
-            "description": (
-                "The six-digit code from the person's authenticator app, if the account "
-                "has one. Ask for it only when this tool says it is needed, and use it "
-                "immediately: codes expire in about thirty seconds."
-            ),
-        },
         "force": {
             "type": "boolean",
-            "description": "Replace an existing session. Ask the person first.",
+            "description": "Re-sign an address that is already signed in. Ask the person first.",
         },
     },
     required=["address"],
 )
 
 
-def password_file() -> str:
-    """The one-time drop a person leaves the password in, beside the sessions."""
-    return os.environ.get(PASSWORD_FILE_ENV) or str(default_root() / "login-password")
-
-
-def _password_instructions() -> str:
-    path = password_file()
+def _login_instructions(address: str) -> str:
+    """How a person signs in: in a terminal, never through me."""
     return (
-        "No password file is waiting, so there is nothing to sign in with. Ask the person "
-        f"to put the account password into {path} on this machine — for example:\n\n"
-        f"  install -m 600 /dev/null {path}\n"
-        f"  cat > {path}    # paste the password, then Ctrl-D\n\n"
-        "Then call proton_login again. The file is deleted as soon as the sign-in "
-        "succeeds, and nothing keeps the password afterwards. Do not ask for the password "
-        "in this conversation."
+        "I never take the account password through chat. Ask the person to run this in a "
+        "terminal — the Terminal tab in Hermes Desktop or the dashboard, or their shell "
+        "over SSH:\n\n"
+        f"  hermes proton login --user {address}\n\n"
+        "It prompts for the password privately (not echoed), walks them through Proton's "
+        "verification page and an authenticator code if the account has one, and saves the "
+        "session. Tell me when it finishes and I will continue. If they offer to paste the "
+        "password here, decline and send them back to the terminal."
     )
 
 
@@ -633,74 +610,11 @@ def handle_login(args: dict[str, Any], **_kw: Any) -> str:
             "force=true if they say yes. Other accounts can be added without force."
         )
 
-    path = Path(password_file())
-    if not path.exists():
-        return _password_instructions()
-    secret = path.read_bytes().strip()
-    if not secret:
-        return _password_instructions()
-
-    try:
-        client = ProtonMail.login(
-            address,
-            secret,
-            session_path=target,
-            verification_token=str(args.get("verification_token") or ""),
-            totp_code=str(args.get("totp_code") or ""),
-        )
-    except HumanVerificationRequired as challenge:
-        return (
-            "Proton wants a person to complete a verification page before allowing this "
-            "sign-in — expected, because this is a server address.\n\n"
-            f"Send them this link exactly as it is: {challenge.web_url}\n\n"
-            "It stays valid for roughly 25 minutes. Once they confirm they are done, call "
-            "proton_login again with the same address plus "
-            f"verification_token={challenge.token}\n"
-            "Do not attempt the verification yourself."
-        )
-    except TwoFactorRequired as needed:
-        return (
-            f"{needed}\n\n"
-            "Ask the person for the code showing in their app right now and call "
-            "proton_login again straight away with totp_code set. If this account also "
-            "needs the verification page, send them the link and ask for the code in the "
-            "same message, then make one call with verification_token and totp_code "
-            "together — that way they are not sent back to the page twice. Never ask for "
-            "their authenticator's setup secret: one code is all this needs, and it is "
-            "useless a minute later."
-        )
-    except ProtonError as exc:
-        # A definitive failure. Verification and 2FA are handled above and keep
-        # the file for the retry they need; everything else means the password
-        # is spent, so I do not leave it sitting in plaintext on disk.
-        path.unlink(missing_ok=True)
-        return (
-            f"Sign-in failed: {exc}\n\n"
-            f"I removed the password file at {path}, so the password is not left "
-            "on disk. To try again, re-create it and call proton_login once more."
-        )
-    finally:
-        del secret
-
-    # The session file is all that is needed from here on.
-    try:
-        path.unlink()
-    except OSError as exc:  # pragma: no cover -- report rather than hide it
-        return (
-            f"Signed in as {address}, but the password file at {path} could not be "
-            f"removed ({exc}). Ask the person to delete it."
-        )
-
-    addresses = ", ".join(a["Email"] for a in client.addresses())
-    sending = (
-        ", ".join(allowed_recipients())
-        if allowed_recipients()
-        else f"off until {ALLOWLIST_ENV} lists who may be emailed"
-    )
-    return (
-        f"Signed in as {address}, and the password file is deleted. Addresses on the "
-        f"account: {addresses}. Reading works now; sending is {sending}."
-    )
+    # The password never comes through me. Sign-in runs in a terminal, where the
+    # person types it into a prompt that does not echo, and that command also
+    # walks them through Proton's verification page and any authenticator code,
+    # then saves the session the other proton_* tools use.
+    return _login_instructions(address)
 
 
 PROTON_DELETE_SCHEMA = _schema(

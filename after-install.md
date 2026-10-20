@@ -6,20 +6,20 @@ separate step, because it is the one that can reach other people.
 ## 1. Sign in (once)
 
 Proton has no app passwords, so this needs the account password once — and it
-must not travel through a chat. Leave it in a one-time file instead:
+must not travel through a chat. You type it into a terminal prompt instead. In
+the Terminal tab of Hermes Desktop/dashboard, or your shell over SSH:
 
 ```bash
-install -m 600 /dev/null ~/.config/protonlite/login-password
-cat > ~/.config/protonlite/login-password   # paste it, then Ctrl-D
+hermes proton login --user you@proton.me
 ```
 
-Then either run `hermes proton login --user you@proton.me`, or just tell the
-agent **"sign in to Proton as you@proton.me"**. It will call `proton_login`,
-read that file, and delete it as soon as the sign-in succeeds — and also if the
-sign-in fails for good, so a wrong password is not left on disk. Nothing keeps
-the password afterwards: what is saved is a session token plus the passphrase
-that opens your keys — which can decrypt mail but cannot log in or change the
-password.
+It asks for the password privately (not echoed), walks you through Proton's
+verification page and a 2FA code if the account has one, and saves the session.
+Or just tell the agent **"sign in to Proton as you@proton.me"** and it hands you
+that same command to run — it never takes the password through the chat. Nothing
+keeps the password afterwards: what is saved is a session token plus the
+passphrase that opens your keys — which can decrypt mail but cannot log in or
+change the password.
 
 ### Expect a verification page
 

@@ -82,16 +82,6 @@ class SecondFactor(unittest.TestCase):
         self.assertIn("clock", message)  # the other classic cause
         self.assertEqual(api.deleted, 1)
 
-    def test_the_login_tool_asks_for_one_code_only(self) -> None:
-        """It must never go after the authenticator's setup secret."""
-        import proton_tools
-
-        description = proton_tools.PROTON_LOGIN_SCHEMA["parameters"]["properties"][
-            "totp_code"
-        ]["description"]
-        self.assertIn("six-digit", description)
-        self.assertIn("thirty seconds", description)
-
 
 if __name__ == "__main__":
     unittest.main()

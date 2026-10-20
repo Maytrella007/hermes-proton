@@ -5,9 +5,10 @@ search, send from, and move attachments through — on a free Proton plan, with 
 Proton Bridge.
 
 The one rule that shapes everything below: **your Proton password never travels
-through the chat.** You type it in a terminal, or drop it in a one-time file the
-agent consumes and deletes. There is no tool that accepts a password, so the
-agent cannot be talked into putting one in a transcript.
+through the chat.** You type it into a terminal prompt — the host shell, your
+shell over SSH, or the Terminal tab in Hermes Desktop/the dashboard. There is no
+tool that accepts a password, so the agent cannot be talked into putting one in
+a transcript.
 
 ---
 
@@ -56,36 +57,27 @@ Then check it:
 hermes proton status
 ```
 
-### Option B — by asking the agent (phone or chat only)
+### Option B — ask the agent, and it points you to the terminal
 
-Useful when the only thing you have is a chat window. You leave the password in a
-one-time file, then tell the agent to sign in.
-
-```bash
-install -m 600 /dev/null ~/.config/protonlite/login-password
-cat > ~/.config/protonlite/login-password     # paste the password, then Ctrl-D
-```
-
-Then, in the chat:
+When the only thing in front of you is a chat window, ask the agent to sign in
+and it hands you the command to run in a terminal (the Terminal tab, or your
+shell over SSH):
 
 > **you:** sign in to Proton as you@proton.me
 >
-> **agent:** Proton wants you to complete this page first:
-> `https://verify.proton.me/?methods=captcha&token=…` — tell me when you're done.
-> If the account has 2FA I'll ask for the code then.
+> **agent:** I never take the password through chat. Run this in a terminal:
+> `hermes proton login --user you@proton.me`. It will ask for the password
+> privately, walk you through Proton's verification page and a 2FA code if the
+> account has one, and save the session. Tell me when you're done.
 >
-> **you:** done, the code is 123456
+> **you:** done
 >
-> **agent:** Signed in, and the password file is deleted.
+> **agent:** Signed in. Reading works now.
 
-The agent reads the one-time file, signs in, and deletes it on success — and
-also deletes it if the sign-in fails for good, so a wrong password is not left
-on disk (the verification and two-factor steps keep it for that one retry). It
-never sees the password itself, and it will decline if you offer to paste the
-password into the chat.
-
-> If the login link is hard to tap on a phone, ask the agent to send it as a file
-> — it can hand you a page with a clickable button.
+The sign-in itself is Option A, run in that terminal — the password, the
+verification page and the authenticator code all stay there. The agent only
+tells you the command and waits; it never takes the password, and it will
+decline if you offer to paste it into the chat.
 
 ---
 

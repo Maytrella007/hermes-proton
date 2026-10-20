@@ -85,36 +85,35 @@ Proton's own apps do. There is no solver here.
 > restarts, reboots and new chats do **not** need this. See the installation
 > guide's troubleshooting.
 
-### Or sign in by asking the agent
+### Or ask the agent, and it points you to the terminal
 
-Useful when the only thing you have is a chat window. Leave the password in a
-one-time file, then tell the agent to sign in:
-
-```bash
-install -m 600 /dev/null ~/.config/protonlite/login-password
-cat > ~/.config/protonlite/login-password   # paste it, then Ctrl-D
-```
+When you start from a chat window, tell the agent to sign in and it hands you
+the one command to run in a terminal — the Terminal tab in Hermes
+Desktop/dashboard, or your shell over SSH. The password is entered there, never
+in the chat.
 
 > **you:** sign in to Proton as you@proton.me
-> **agent:** *(calls `proton_login`)* Proton wants you to complete this page
-> first: https://verify.proton.me/?methods=captcha&token=… — tell me when
+> **agent:** *(calls `proton_login`)* I never take the password through chat.
+> Run this in a terminal: `hermes proton login --user you@proton.me`. It will
+> ask for the password privately, walk you through Proton's verification page
+> and a 2FA code if the account has one, and save the session. Tell me when
 > you're done.
 > **you:** done
-> **agent:** *(calls it again with the token)* Signed in, and the password file
-> is deleted.
+> **agent:** *(the other proton_\* tools now work)* Signed in. Reading works now.
 
-If the account has two-factor authentication, the agent will ask for the
-six-digit code at the same time — one code, used immediately, never the
-authenticator's setup secret.
+The terminal sign-in prompts for an authenticator code when the account has
+two-factor on — one code, used immediately, never the authenticator's setup
+secret.
 
 **The password never goes through the chat.** `proton_login` takes no password
 parameter — a tool that accepted one would park an account's master password in
-a chat history and a model's context forever. It reads that file, consumes it,
-and deletes it on success — and also deletes it if the sign-in fails for good,
-so a wrong password is never left sitting in plaintext on disk. The account
-password is never stored anywhere after that. It is also the one tool offered
-before a session exists, since gating it on a session would leave no way to
-create one.
+a chat history and a model's context forever. Instead it hands you the terminal
+command `hermes proton login`, which reads the password from a prompt that does
+not echo, completes Proton's verification page and any authenticator code, and
+saves the session. The account password is never written to a file the agent
+reads, never put in an environment variable, and never stored anywhere after
+sign-in. `proton_login` is also the one tool offered before a session exists,
+since gating it on a session would leave no way to create one.
 
 Sending stays off until you say who the agent may write to:
 

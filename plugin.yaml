@@ -1,15 +1,14 @@
 name: hermes-proton
-version: 0.26.1
+version: 0.27.0
 description: >
   Proton Mail for Hermes. Reads and sends mail through Proton's own API — no
   Proton Bridge and no paid plan required — using an MIT-licensed client written
   from Proton's own open-source Go libraries. Sending is refused unless a
-  recipient allowlist is configured. Sign in once, either with
-  `hermes proton login` or by asking the agent: the password is read from a
-  one-time local file and deleted, never typed into a chat, and Proton's
-  verification page is completed by a person. Several accounts can be signed in
-  at once; with more than one, a tool call that does not name an account is
-  refused rather than guessed.
+  recipient allowlist is configured. Sign in once by running
+  `hermes proton login` in a terminal: the password is typed into a prompt that
+  does not echo, never into a chat, and Proton's verification page is completed
+  by a person. Several accounts can be signed in at once; with more than one, a
+  tool call that does not name an account is refused rather than guessed.
 author: Maytrella007
 kind: standalone
 platforms:
@@ -60,10 +59,6 @@ provides_tools:
 provides_cli:
   - proton
 optional_env:
-  - name: PROTON_PASSWORD_FILE
-    description: "One-time file the sign-in reads the account password from and then deletes (default: next to the session file). Never put the password in an env var: anything the agent runs in a terminal would see it."
-    prompt: "Password file path"
-    password: false
   - name: PROTONLITE_HOME
     description: "Directory holding the per-account session files (default: ~/.config/protonlite)"
     prompt: "Session directory"
