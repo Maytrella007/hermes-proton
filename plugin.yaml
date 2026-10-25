@@ -11,6 +11,10 @@ description: >
   tool call that does not name an account is refused rather than guessed.
 author: Maytrella007
 kind: standalone
+# Declared here as well as in the catalog entry: the catalog enforces it at
+# install and update, and `hermes plugins validate` reads this one. ctx.get_config,
+# ctx.current_cron_execution and plugins.plugin_storage are all 0.22-era APIs.
+requires_hermes: ">=0.22.0"
 platforms:
   - linux
   - macos
