@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -311,13 +312,46 @@ class SendApprovalGate(unittest.TestCase):
         self.assertIn("a@b.com", d["message"])
         self.assertIn("cc c@d.com", d["message"])
         self.assertIn("hi", d["message"])
-        self.assertIn("1 attachment", d["message"])
+        self.assertIn("1 local file", d["message"])
 
     def test_rule_key_is_per_recipient(self) -> None:
         d = tools.pre_tool_call_directive("proton_send", {"to": ["A@B.com"], "bcc": ["z@y.com"]})
         self.assertTrue(d["rule_key"].startswith("proton_send:"))
         self.assertIn("a@b.com", d["rule_key"])  # normalized lowercase
         self.assertIn("z@y.com", d["rule_key"])
+
+    def test_the_prompt_names_every_attachment_by_its_real_path(self) -> None:
+        # It said "2 attachment(s)" and nothing else, so a send prompted by an
+        # injected mail could attach ~/.ssh/id_rsa and look like any other
+        # send. The path is resolved, since ~/mail/../.ssh/id_rsa is the same
+        # file under another name.
+        with tempfile.TemporaryDirectory() as home:
+            secret = Path(home) / ".ssh" / "id_rsa"
+            secret.parent.mkdir()
+            secret.write_text("KEY")
+            sneaky = Path(home) / "mail" / ".." / ".ssh" / "id_rsa"
+            d = tools.pre_tool_call_directive(
+                "proton_send", {"to": ["a@b.com"], "attachments": [str(sneaky)]})
+        self.assertIn(str(secret), d["message"])
+        self.assertIn("read from this machine", d["message"])
+
+    def test_always_for_a_recipient_does_not_pre_approve_another_file(self) -> None:
+        # The whole point of keying on the files: "always" is an answer about
+        # what was on the screen, and another file is another question.
+        first = tools.pre_tool_call_directive(
+            "proton_send", {"to": ["a@b.com"], "attachments": ["/tmp/report.pdf"]})
+        other = tools.pre_tool_call_directive(
+            "proton_send", {"to": ["a@b.com"], "attachments": ["/tmp/id_rsa"]})
+        plain = tools.pre_tool_call_directive("proton_send", {"to": ["a@b.com"]})
+        self.assertNotEqual(first["rule_key"], other["rule_key"])
+        self.assertNotEqual(first["rule_key"], plain["rule_key"])
+        self.assertIn("/tmp/report.pdf", first["rule_key"])
+        # The order the model happened to list them in is not a new question.
+        same = tools.pre_tool_call_directive(
+            "proton_send", {"to": ["a@b.com"], "attachments": ["/tmp/b.pdf", "/tmp/a.pdf"]})
+        swapped = tools.pre_tool_call_directive(
+            "proton_send", {"to": ["a@b.com"], "attachments": ["/tmp/a.pdf", "/tmp/b.pdf"]})
+        self.assertEqual(same["rule_key"], swapped["rule_key"])
 
     def test_other_tools_are_not_gated(self) -> None:
         for name in ("proton_read", "proton_list", "proton_search", "proton_get_attachment"):

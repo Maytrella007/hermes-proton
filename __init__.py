@@ -37,7 +37,7 @@ import proton_tools as _tools
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.26.1"
+__version__ = "0.28.0"
 
 
 def _setup_cli(parser) -> None:
@@ -209,6 +209,15 @@ def _handle_cli(args) -> int:
 
 def register(ctx) -> None:
     """Called once by the plugin loader."""
+    # Two things only the host can answer: where this plugin's settings live
+    # (the recipient allowlist) and which scheduled run a call is inside.
+    _tools.use_hermes(ctx)
+    # Sessions used to live in ~/.config/protonlite for every profile at once.
+    # They are this plugin's data now, which is what makes two profiles two
+    # mailboxes -- and an upgrade must not read as "you are logged out".
+    adopted = _tools.adopt_legacy_sessions()
+    if adopted:
+        print(adopted)
     # Signing in cannot be gated on having a session: that is what it creates.
     for name, schema, handler, emoji, toolset in _tools.UNGATED_TOOLS:
         ctx.register_tool(
@@ -228,10 +237,13 @@ def register(ctx) -> None:
             emoji=emoji,
         )
 
-    # Route every outgoing email through Hermes's human-approval gate. The gate
-    # runs before the handler and fails closed, so no send happens -- by a
-    # confused, manipulated, or less capable model -- without a person approving
-    # it first. Only proton_send is gated; reading and searching are not.
+    # Route everything outbound or irreversible through Hermes's human-approval
+    # gate. The gate runs before the handler and fails closed, so none of it
+    # happens -- by a confused, manipulated, or less capable model -- without a
+    # person approving it first: every send, an event that emails invitations,
+    # an RSVP, a public share link, an upload of a local file, a permanent
+    # delete, emptying Trash or Spam, deleting a contact. Reading, searching,
+    # labelling and the recoverable writes are not gated.
     def _pre_tool_call(tool_name: str = "", args=None, **_kwargs):
         return _tools.pre_tool_call_directive(tool_name, args)
 

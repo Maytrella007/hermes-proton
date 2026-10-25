@@ -57,3 +57,28 @@ class SendBcc(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IrreversibleDeletesAreApproved(unittest.TestCase):
+    """Trash is recoverable and is not gated; "for good" is gated.
+
+    The review that asked for this put it plainly: the irreversible ones are
+    the ones worth a prompt. Gating the recoverable ones as well would teach a
+    person to click through every prompt, including the ones that matter.
+    """
+
+    def test_a_move_to_trash_is_not_gated(self):
+        self.assertIsNone(tools.pre_tool_call_directive("proton_delete", {"ids": ["a", "b"]}))
+
+    def test_a_permanent_delete_is_gated_and_says_so(self):
+        asked = tools.pre_tool_call_directive(
+            "proton_delete", {"ids": ["a", "b"], "permanent": True})
+        self.assertEqual(asked["action"], "approve")
+        self.assertIn("PERMANENTLY", asked["message"])
+        self.assertIn("a", asked["message"])
+
+    def test_deleting_a_contact_is_gated(self):
+        asked = tools.pre_tool_call_directive("proton_delete_contact", {"name": "Ana"})
+        self.assertEqual(asked["action"], "approve")
+        self.assertIn("Ana", asked["message"])
+        self.assertIn("no trash", asked["message"])

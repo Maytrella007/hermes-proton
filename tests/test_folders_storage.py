@@ -189,11 +189,18 @@ class ManageLabel(unittest.TestCase):
     def test_bad_action(self):
         self.assertIn("create", tools.handle_manage_label({"action": "frobnicate", "name": "x"}))
 
-    def test_write_tools_not_gated(self):
+    def test_managing_a_label_is_not_gated_but_emptying_a_folder_is(self):
+        # Deleting a label loses no mail; emptying Trash or Spam cannot be
+        # undone, which is the line the gates are drawn on.
         toolset_of = {name: ts for name, _s, _h, _e, ts in tools.TOOLS}
         for w in ("proton_empty", "proton_manage_label"):
             self.assertEqual(toolset_of[w], tools.TOOLSET_WRITE)
-            self.assertIsNone(tools.pre_tool_call_directive(w, {"folder": "trash", "action": "delete", "name": "x"}))
+        self.assertIsNone(tools.pre_tool_call_directive(
+            "proton_manage_label", {"action": "delete", "name": "x"}))
+        asked = tools.pre_tool_call_directive("proton_empty", {"folder": "trash"})
+        self.assertEqual(asked["action"], "approve")
+        self.assertIn("trash", asked["message"])
+        self.assertIn("for good", asked["message"])
 
 
 if __name__ == "__main__":

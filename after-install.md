@@ -42,14 +42,13 @@ and `hermes proton read <id>` work from the terminal too.
 
 ## 3. Turn on sending, if you want it
 
-Sending refuses everything until you say who may be emailed. In
-`~/.hermes/.env`:
+Sending refuses everything until you say who may be emailed:
 
 ```
-PROTON_ALLOWED_RECIPIENTS=you@example.com,*@your-company.com
+hermes plugins settings hermes-proton --set allowed_recipients='["you@example.com","*@your-company.com"]'
 ```
 
-Then restart the gateway. The reason it works this way: whatever holds these
+(or the plugin's page in the Desktop app). The reason it works this way: whatever holds these
 tools usually also holds a terminal, and a confused or manipulated agent
 should only be able to mail people you nominated.
 

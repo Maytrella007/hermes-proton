@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import types
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -229,12 +230,45 @@ class DriveToolset(unittest.TestCase):
         toolset_of = {name: ts for name, _s, _h, _e, ts in tools.TOOLS}
         self.assertEqual(toolset_of["proton_drive_list"], tools.TOOLSET)
         self.assertEqual(toolset_of["proton_drive_download"], tools.TOOLSET)
-        for w in ("proton_drive_create_folder", "proton_drive_upload", "proton_drive_move", "proton_drive_delete", "proton_drive_rename", "proton_drive_unshare"):
+        # Recoverable writes are not gated: Proton's own trash keeps a trashed
+        # item, and a move or a rename can be moved or renamed back. Asking
+        # about those teaches a person to click through the prompts that do
+        # matter.
+        for w in ("proton_drive_create_folder", "proton_drive_move", "proton_drive_delete",
+                  "proton_drive_rename", "proton_drive_unshare"):
             self.assertEqual(toolset_of[w], tools.TOOLSET_WRITE)
             self.assertIsNone(tools.pre_tool_call_directive(w, {"path": "x", "name": "y"}))
         self.assertEqual(toolset_of["proton_drive_share"], tools.TOOLSET_WRITE)  # gated, see DriveWrite
+        self.assertEqual(toolset_of["proton_drive_upload"], tools.TOOLSET_WRITE)  # gated, below
         self.assertIsNone(tools.pre_tool_call_directive("proton_drive_list", {}))
         self.assertIsNone(tools.pre_tool_call_directive("proton_drive_download", {"path": "x"}))
+
+
+class DriveUploadApproval(unittest.TestCase):
+    """An upload reads a local file, so a person is shown which one.
+
+    It read any path with no approval at all, and the prompt that came after
+    it -- the share link -- shows only the Drive name, which the model chose.
+    A secret uploaded as "report.pdf" looked like a report everywhere a person
+    was asked anything.
+    """
+
+    def test_the_prompt_shows_the_resolved_local_path_and_the_destination(self):
+        d = tools.pre_tool_call_directive(
+            "proton_drive_upload",
+            {"local_path": "~/.ssh/id_rsa", "name": "report.pdf", "folder": "Shared"},
+        )
+        self.assertEqual(d["action"], "approve")
+        self.assertIn(str(Path("~/.ssh/id_rsa").expanduser().resolve()), d["message"])
+        self.assertIn("Shared/report.pdf", d["message"])
+
+    def test_always_is_per_file_and_per_destination(self):
+        first = tools.pre_tool_call_directive("proton_drive_upload", {"local_path": "/tmp/a.pdf"})
+        other = tools.pre_tool_call_directive("proton_drive_upload", {"local_path": "/tmp/b.pdf"})
+        renamed = tools.pre_tool_call_directive(
+            "proton_drive_upload", {"local_path": "/tmp/a.pdf", "name": "elsewhere.pdf"})
+        self.assertNotEqual(first["rule_key"], other["rule_key"])
+        self.assertNotEqual(first["rule_key"], renamed["rule_key"])
 
 
 if __name__ == "__main__":

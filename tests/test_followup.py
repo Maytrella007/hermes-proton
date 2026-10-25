@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import sys
 import types
+from types import SimpleNamespace
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -149,3 +151,50 @@ class ScheduleFollowup(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CronScheduling(unittest.TestCase):
+    """A scheduled run does not schedule more work.
+
+    `cron.allow_agent_scheduling` is the switch that decides whether an agent
+    may create jobs at all, and a job that creates jobs renews itself without
+    anybody agreeing to it a second time. The run is read from Hermes, never
+    from the model.
+    """
+
+    def tearDown(self) -> None:
+        tools.use_hermes(None)
+
+    def test_a_follow_up_is_refused_from_inside_a_scheduled_run(self) -> None:
+        class _Ctx:
+            def current_cron_execution(self):
+                return SimpleNamespace(job_id="abc123", job_name="Proton follow-up: invoice")
+
+        tools.use_hermes(_Ctx())
+        said = tools.handle_schedule_followup(
+            {"when": "in 3 days", "about": "the invoice", "topic": "invoice"})
+        self.assertIn("Refused", said)
+        self.assertIn("Proton follow-up: invoice", said)
+        self.assertIn("allow_agent_scheduling", said)
+
+    def test_outside_cron_there_is_nothing_to_refuse(self) -> None:
+        class _Ctx:
+            def current_cron_execution(self):
+                return None
+
+        tools.use_hermes(_Ctx())
+        self.assertIsNone(tools.inside_cron())
+
+    def test_a_long_about_is_refused_rather_than_pasted_into_a_job(self) -> None:
+        said = tools.handle_schedule_followup(
+            {"when": "in 3 days", "about": "x" * (tools.ABOUT_LIMIT + 1), "topic": "t"})
+        self.assertIn(f"{tools.ABOUT_LIMIT:,}", said)
+
+    def test_the_private_core_import_is_gone(self) -> None:
+        # A plugin reading `tools.cronjob_job_args._origin_from_env` is reading
+        # a private helper of the host; core resolves the delivery target. The
+        # name survives in a comment saying so, which is why this looks for the
+        # import and not for the name.
+        source = Path(tools.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("import tools.cronjob_job_args", source)
+        self.assertNotIn("from tools.cronjob_job_args", source)

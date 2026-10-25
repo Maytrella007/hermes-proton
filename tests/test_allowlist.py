@@ -62,3 +62,51 @@ class Allowlist(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AllowlistComesFromTheSettings(unittest.TestCase):
+    """The allowlist is a setting, not a secret.
+
+    `.env` holds secrets; a list of addresses the agent may write to is
+    visible behaviour a person should be able to read and change on the
+    plugin's own page, and it belongs to the profile that set it. The
+    environment variable is still read when the setting is empty, because the
+    standalone CLI has no settings and nobody configured that way should have
+    sending stop working.
+    """
+
+    def setUp(self) -> None:
+        self._saved = os.environ.get(tools.ALLOWLIST_ENV)
+        os.environ.pop(tools.ALLOWLIST_ENV, None)
+
+    def tearDown(self) -> None:
+        tools.use_hermes(None)
+        if self._saved is None:
+            os.environ.pop(tools.ALLOWLIST_ENV, None)
+        else:
+            os.environ[tools.ALLOWLIST_ENV] = self._saved
+
+    def _ctx(self, value):
+        class _Ctx:
+            def get_config(self, key, default=None):
+                return value if key == "allowed_recipients" else default
+        return _Ctx()
+
+    def test_a_list_setting_is_the_allowlist(self) -> None:
+        tools.use_hermes(self._ctx(["A@B.com", "*@acme.com"]))
+        self.assertEqual(tools.allowed_recipients(), ["a@b.com", "*@acme.com"])
+        self.assertEqual(tools.recipient_refusals(["who@acme.com"]), [])
+
+    def test_a_comma_separated_string_is_accepted_too(self) -> None:
+        tools.use_hermes(self._ctx("a@b.com, *@acme.com"))
+        self.assertEqual(tools.allowed_recipients(), ["a@b.com", "*@acme.com"])
+
+    def test_the_environment_still_answers_when_the_setting_is_empty(self) -> None:
+        tools.use_hermes(self._ctx([]))
+        os.environ[tools.ALLOWLIST_ENV] = "legacy@b.com"
+        self.assertEqual(tools.allowed_recipients(), ["legacy@b.com"])
+
+    def test_with_neither_there_is_no_allowlist_and_sending_is_refused(self) -> None:
+        tools.use_hermes(self._ctx([]))
+        self.assertEqual(tools.allowed_recipients(), [])
+        self.assertEqual(tools.recipient_refusals(["a@b.com"]), ["a@b.com"])

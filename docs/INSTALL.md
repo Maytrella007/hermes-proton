@@ -84,7 +84,13 @@ decline if you offer to paste it into the chat.
 ## 3. Add more than one account (optional)
 
 Sign in again as a second address. Each account gets its own session file under
-`~/.config/protonlite/sessions/`, and every tool then takes an optional account.
+`<hermes home>/plugin-data/hermes-proton/sessions/` — your Hermes home, so each
+profile has its own signed-in accounts — and every tool then takes an optional
+account. (The standalone `protonlite` CLI, and `PROTONLITE_HOME` if you set it,
+use `~/.config/protonlite` instead.) Upgrading from a version that kept its
+sessions in `~/.config/protonlite` does not log you out: they are copied into
+the plugin's directory the first time it loads, and the originals are left
+where they were.
 
 ```bash
 hermes proton accounts
@@ -104,12 +110,17 @@ Reading works as soon as you are signed in. **Sending stays off until you say wh
 the agent may write to** — an agent with mail tools usually also has a shell, and
 an allowlist keeps a confused or manipulated agent to a list you chose.
 
-Put an allowlist in `~/.hermes/.env` and restart the gateway:
+The allowlist is one of the plugin's settings — a list of addresses is visible
+behaviour, not a secret, and `.env` is for secrets. Each profile has its own:
 
 ```bash
-# comma-separated; globs like *@your-company.com are allowed
-PROTON_ALLOWED_RECIPIENTS=you@example.com,*@your-company.com
+hermes plugins settings hermes-proton --set allowed_recipients='["you@example.com","*@your-company.com"]'
 ```
+
+Globs like `*@your-company.com` are allowed, and the Desktop app's plugin page
+has the same field (Settings → Plugins → hermes-proton → Allowed recipients).
+`PROTON_ALLOWED_RECIPIENTS` in `~/.hermes/.env` is still read when the setting
+is empty, which is how the standalone `protonlite` CLI is configured.
 
 `hermes proton status` prints the current allowlist alongside the session. A send
 to anyone not covered is refused before it leaves, and `to`, `cc` **and** `bcc`
@@ -117,17 +128,18 @@ are all checked.
 
 On top of that, **every send is confirmed by a person.** The plugin routes
 `proton_send` through Hermes's approval gate: before a send runs, you are asked to
-approve or deny it (`/approve`, `/deny`, or yes/no) with the recipients, subject
-and attachment count shown. The gate runs before the send and fails closed, so a
-manipulated or less capable model cannot send on its own. Choose *always* at the
-prompt to pre-approve a recipient. If you would rather let the agent write to
-anyone but confirm each one, set `PROTON_ALLOWED_RECIPIENTS=*` and rely on the
-approval gate.
+approve or deny it (`/approve`, `/deny`, or yes/no) with the recipients, the
+subject, and **every attachment by its full path on this machine**. The gate runs
+before the send and fails closed, so a manipulated or less capable model cannot
+send on its own. Choose *always* at the prompt to pre-approve that recipient
+**with those files**: a send with a different file is a different question and
+asks again. If you would rather let the agent write to anyone but confirm each
+one, set `allowed_recipients: ["*"]` and rely on the approval gate.
 
 > **Keep the allowlist tight.** When it sends, the agent can attach any local
-> file it is able to read. A narrow allowlist (specific addresses, not broad
-> wildcards) is what stops a manipulated agent from mailing a file it shouldn't
-> to somewhere it shouldn't.
+> file it is able to read — which is why the prompt names each one, resolved, so
+> `~/.ssh/id_rsa` cannot arrive looking like `report.pdf`. A narrow allowlist
+> (specific addresses, not broad wildcards) is the other half of that.
 
 ---
 
@@ -158,7 +170,7 @@ signed in, and asks which to use if a request is ambiguous.
 
 Ask the agent to fetch it. It downloads the attachment, decrypts it with your
 account key, and saves it to a local file under
-`~/.config/protonlite/attachments/<message>/`. For a text file it shows the
+`<hermes home>/plugin-data/hermes-proton/attachments/<message>/`. For a text file it shows the
 contents inline; for a PDF, image, or archive it gives you the path so the agent
 (or you) can open it.
 
@@ -192,8 +204,9 @@ recent from?"*
 
 ## 8. What is stored (and what is not)
 
-- A per-account session file (`~/.config/protonlite/sessions/<address>.json`,
-  mode 0600) holds the access/refresh tokens and the **salted key passphrase**.
+- A per-account session file
+  (`<hermes home>/plugin-data/hermes-proton/sessions/<address>.json`, mode 0600)
+  holds the access/refresh tokens and the **salted key passphrase**.
 - **Your password is never stored.** The passphrase in that file can decrypt your
   mail but cannot log in, change the password, or reach any other Proton service.
 - The session is a signed-in device on Proton's side. `hermes proton logout`
@@ -206,8 +219,8 @@ recent from?"*
 ## 9. Troubleshooting
 
 - **"Sending is disabled: no recipient allowlist is configured."**
-  Set `PROTON_ALLOWED_RECIPIENTS` in `~/.hermes/.env` and restart the gateway
-  (step 4).
+  Set the `allowed_recipients` setting (step 4), or `PROTON_ALLOWED_RECIPIENTS`
+  in `~/.hermes/.env` and restart the gateway.
 - **It keeps asking for the verification page.** Complete the printed link in a
   real browser; if Proton rate-limits repeated logins, sign in once from a browser
   and retry.

@@ -31,7 +31,7 @@ if _HERE not in sys.path:
 from typing import Any
 
 from protonlite import calendar as _calendar, htmltext
-from protonlite.accounts import AccountStore, default_root
+from protonlite.accounts import ROOT_ENV, AccountStore, default_root
 from protonlite.client import SYSTEM_LABELS, ProtonMail
 from protonlite.errors import ProtonError, SessionExpired
 
@@ -47,6 +47,9 @@ ALLOWLIST_ENV = "PROTON_ALLOWED_RECIPIENTS"
 BODY_LIMIT = 20_000
 #: Largest single attachment to read and send (Proton caps the total near 25 MB).
 ATTACHMENT_LIMIT = 25_000_000
+#: Longest `about` a scheduled follow-up accepts. It goes into the prompt of a
+#: job that runs unattended, and a mailbox is where outside text arrives.
+ABOUT_LIMIT = 2_000
 
 #: Everything that comes out of a mailbox -- a body, a subject, a sender name, the
 #: text of an attachment -- was written by whoever sent the mail, who may be
@@ -81,8 +84,123 @@ _LISTING_NOTE = (
 )
 
 
+#: Set by ``register()`` when Hermes loads the plugin: where to read this
+#: plugin's settings and which scheduled run the call is inside. None when the
+#: protonlite CLI is being used on its own, where neither exists.
+_hermes: Any = None
+
+
+def use_hermes(ctx: Any) -> None:
+    """Remember the plugin context, for the two things only Hermes can answer."""
+    global _hermes
+    _hermes = ctx
+
+
+def inside_cron() -> Any:
+    """The scheduled run this call is executing inside, or None.
+
+    Hermes sets it only after a run has won its execution claim and clears it
+    when the run ends, and the model cannot forge it: hook arguments and this
+    accessor come from the host. None outside Hermes and None outside cron.
+    """
+    if _hermes is None:
+        return None
+    try:
+        return _hermes.current_cron_execution()
+    except Exception:  # pragma: no cover - a host without the accessor
+        return None
+
+
+def _setting(key: str, default: Any = None) -> Any:
+    """One of this plugin's settings (``plugins.entries.hermes-proton.settings``).
+
+    Settings and not ``.env``: ``.env`` is for secrets, and a recipient
+    allowlist is a visible behaviour a person should be able to read and edit
+    in the Desktop's plugin page. Returns *default* outside Hermes.
+    """
+    if _hermes is None:
+        return default
+    try:
+        return _hermes.get_config(key, default=default)
+    except Exception:  # pragma: no cover - a host without the accessor
+        return default
+
+
+def _root() -> Path:
+    """Where this plugin keeps its signed-in accounts and its downloads.
+
+    Inside Hermes it is the plugin's own data directory, resolved on every
+    call so it follows the active profile: two profiles are two sets of
+    signed-in accounts, which is the point of a profile. Before this, every
+    profile shared ``~/.config/protonlite`` and therefore shared the mailbox.
+
+    ``PROTONLITE_HOME`` still wins, and outside Hermes there is nothing to
+    resolve, so protonlite's own default applies -- which is what the
+    standalone CLI keeps using.
+    """
+    if os.environ.get(ROOT_ENV):
+        return Path(default_root())
+    try:
+        from plugins.plugin_storage import plugin_data_dir
+    except Exception:
+        return Path(default_root())
+    try:
+        return Path(plugin_data_dir("hermes-proton"))
+    except Exception:  # pragma: no cover - an unwritable home is not our error
+        return Path(default_root())
+
+
+def adopt_legacy_sessions() -> str:
+    """Bring an older install's sessions into this plugin's data directory.
+
+    Moving the session root is right -- a profile should not share a mailbox
+    with another profile -- but on its own it logs out everyone who was
+    already signed in, silently, on an upgrade. So the files are copied once:
+    only when nothing has been signed in here yet, only from protonlite's old
+    default, and only when `PROTONLITE_HOME` is not pointing somewhere
+    deliberate. Copied rather than moved, so going back a version still finds
+    them, and never over a file that already exists.
+
+    Returns a sentence when it did something, "" otherwise. Nothing here
+    raises: a plugin that cannot load because an old directory was odd is
+    worse than one that asks for a fresh sign-in.
+    """
+    try:
+        if os.environ.get(ROOT_ENV):
+            return ""
+        now = _root() / "sessions"
+        was = Path.home() / ".config" / "protonlite" / "sessions"
+        if now == was or not was.is_dir():
+            return ""
+        if any(now.glob("*.json")):
+            return ""
+        found = sorted(was.glob("*.json"))
+        if not found:
+            return ""
+        now.mkdir(parents=True, exist_ok=True)
+        import shutil
+
+        taken = []
+        for session in found:
+            target = now / session.name
+            if target.exists():
+                continue
+            shutil.copy2(session, target)
+            target.chmod(0o600)
+            taken.append(session.stem)
+        if not taken:
+            return ""
+        return (
+            f"hermes-proton: adopted {len(taken)} signed-in account(s) from {was} into "
+            f"{now} (the sessions now follow the active profile; the old files were left "
+            "in place)."
+        )
+    except Exception:  # pragma: no cover - never worth failing a load over
+        return ""
+
+
 def store() -> AccountStore:
-    return AccountStore()
+    return AccountStore(_root())
 
 
 _ACCOUNT_PROP = {
@@ -113,10 +231,28 @@ def check_requirements() -> tuple[bool, str]:
 
 
 def _client(args: dict[str, Any] | None = None) -> ProtonMail:
-    return ProtonMail.for_account(str((args or {}).get("account") or ""))
+    return ProtonMail.for_account(str((args or {}).get("account") or ""), root=_root())
 
 
 def allowed_recipients() -> list[str]:
+    """The addresses the agent may write to, as glob patterns.
+
+    From this plugin's settings first (`allowed_recipients`), because a
+    recipient list is visible behaviour and not a secret, and because a
+    setting belongs to the profile that configured it. ``.env`` is still read
+    when the setting is empty: the standalone CLI has no settings, and nobody
+    who configured it that way should have sending stop working.
+    """
+    configured = _setting("allowed_recipients", None)
+    if isinstance(configured, str):
+        entries = configured.split(",")
+    elif isinstance(configured, (list, tuple)):
+        entries = [str(item) for item in configured]
+    else:
+        entries = []
+    patterns = [entry.strip().lower() for entry in entries if str(entry).strip()]
+    if patterns:
+        return patterns
     raw = os.environ.get(ALLOWLIST_ENV, "")
     return [entry.strip().lower() for entry in raw.split(",") if entry.strip()]
 
@@ -414,7 +550,9 @@ def handle_send(args: dict[str, Any], **_kw: Any) -> str:
         raw_path = spec.get("path")
         if not raw_path:
             return "Each attachment is a file path, or an object with a path."
-        path = Path(str(raw_path)).expanduser()
+        # resolve(), like the approval prompt: a person who approved
+        # /home/you/report.pdf must not have a symlink read in its place.
+        path = Path(str(raw_path)).expanduser().resolve()
         if not path.is_file():
             return f"Attachment not found: {path}"
         if path.stat().st_size > ATTACHMENT_LIMIT:
@@ -479,6 +617,23 @@ def handle_send(args: dict[str, Any], **_kw: Any) -> str:
     return f"{verb} from {_address_of(client)} {where} (id {sent.id})."
 
 
+def attachment_paths(raw_list: Any) -> list[str]:
+    """Every local file a send would read, as an absolute resolved path.
+
+    Resolved and not as typed: `~/mail/../.ssh/id_rsa` and a symlink both have
+    to show the file that is actually opened, because this list is what a
+    person reads before saying yes. The handler resolves the same way, so what
+    was approved is what is sent.
+    """
+    paths: list[str] = []
+    for raw in raw_list or []:
+        spec = {"path": raw} if isinstance(raw, str) else dict(raw or {})
+        where = str(spec.get("path") or "").strip()
+        if where:
+            paths.append(str(Path(where).expanduser().resolve()))
+    return paths
+
+
 def send_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
     """The pre_tool_call directive that routes a send through Hermes's human gate.
 
@@ -486,27 +641,44 @@ def send_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
     manipulated or less capable model cannot skip it -- it is the model-
     independent half of "never send without a person saying yes". The allowlist
     still bounds who may be written to; this bounds whether a send happens at
-    all. rule_key is per-recipient, so picking "always" at the prompt pre-
-    approves just that recipient (the "pre-approved" exception).
+    all. rule_key is per-recipient AND per-attachment, so picking "always" at
+    the prompt pre-approves just that recipient (the "pre-approved" exception)
+    and only with the files that were on the screen.
+
+    Both halves of that are one fix. The prompt used to say "2 attachment(s)"
+    and key on the recipient alone, so a person who had once answered "always"
+    for a colleague had pre-approved *any* later send to them -- and a send
+    prompted by an injected mail could attach ``~/.ssh/id_rsa`` or
+    ``~/.hermes/.env`` with nothing shown and nothing asked. Every file is
+    named by its resolved absolute path now, and a different file is a
+    different question.
     """
     to = [str(a) for a in (args.get("to") or [])]
     cc = [str(a) for a in (args.get("cc") or [])]
     bcc = [str(a) for a in (args.get("bcc") or [])]
     subject = str(args.get("subject") or "")
-    n_att = len(args.get("attachments") or [])
+    files = attachment_paths(args.get("attachments"))
     parts = ["to " + (", ".join(to) or "(nobody)")]
     if cc:
         parts.append("cc " + ", ".join(cc))
     if bcc:
         parts.append("bcc " + ", ".join(bcc))
-    extra = f"; {n_att} attachment(s)" if n_att else ""
+    extra = ""
+    if files:
+        shown = "\n".join(f"  - {where}" for where in files)
+        extra = f"\nAttaching {len(files)} local file(s), read from this machine:\n{shown}"
     verb = "Reply in thread" if str(args.get("reply_to") or "").strip() else "Send email"
     message = f'{verb} {"; ".join(parts)}; subject "{subject}"{extra}'
     recipients = sorted({r.strip().lower() for r in (to + cc + bcc) if r.strip()})
+    rule_key = "proton_send:" + ",".join(recipients)
+    if files:
+        # The files were part of the question, so they are part of what a
+        # person answered: "always" covers these recipients with these files.
+        rule_key += "|files:" + ",".join(sorted(files))
     return {
         "action": "approve",
         "message": message,
-        "rule_key": "proton_send:" + ",".join(recipients),
+        "rule_key": rule_key,
     }
 
 
@@ -529,6 +701,31 @@ def create_event_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def upload_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
+    """Approval directive for putting a local file into Proton Drive.
+
+    An upload reads any path on this machine, and the prompt that came after
+    it -- the share link -- shows only the Drive name, which the model chose.
+    So a secret uploaded as "report.pdf" looked like a report at every point a
+    person was asked anything. The local path is resolved and shown here, at
+    the only moment where the file is still identifiable, and the key is per
+    file and per destination.
+    """
+    raw = str(args.get("local_path") or "").strip()
+    where = str(Path(raw).expanduser().resolve()) if raw else "(no path)"
+    folder = str(args.get("folder") or "").strip()
+    name = str(args.get("name") or "").strip() or Path(where).name
+    destination = f"{folder.rstrip('/')}/{name}" if folder else name
+    return {
+        "action": "approve",
+        "message": (
+            f"Upload a file from this machine to Proton Drive:\n"
+            f"  - from {where}\n  - to {destination!r} in Drive"
+        ),
+        "rule_key": f"proton_drive_upload:{where}|{destination.lower()}",
+    }
+
+
 def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
     """Plugin pre_tool_call policy: a person approves every outgoing email.
 
@@ -540,6 +737,38 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
         return send_approval_directive(args or {})
     if tool_name == "proton_create_event" and (args or {}).get("attendees"):
         return create_event_approval_directive(args or {})
+    # The three that cannot be undone. Everything else that writes is
+    # recoverable -- Trash keeps a message, Proton's own trash keeps a Drive
+    # item, a move or a rename can be moved or renamed back -- and asking
+    # about those would teach a person to click through the prompts that
+    # matter. Nothing here is outbound; this is about what cannot be got back.
+    if tool_name == "proton_delete" and (args or {}).get("permanent"):
+        ids = [str(i) for i in ((args or {}).get("ids") or [])]
+        return {
+            "action": "approve",
+            "message": (
+                f"PERMANENTLY delete {len(ids)} Proton message(s) -- not to Trash, gone: "
+                + ", ".join(ids[:6]) + (" ..." if len(ids) > 6 else "")
+            ),
+            "rule_key": "proton_delete:permanent",
+        }
+    if tool_name == "proton_empty":
+        folder = str((args or {}).get("folder") or "").strip().lower()
+        return {
+            "action": "approve",
+            "message": f"Empty the whole {folder or '?'} folder in Proton Mail -- every message in "
+                       "it is deleted for good",
+            "rule_key": f"proton_empty:{folder}",
+        }
+    if tool_name == "proton_delete_contact":
+        who = str((args or {}).get("name") or (args or {}).get("contact_id") or "?")
+        return {
+            "action": "approve",
+            "message": f"Delete the Proton contact {who!r} for good (contacts have no trash)",
+            "rule_key": "proton_delete_contact",
+        }
+    if tool_name == "proton_drive_upload":
+        return upload_approval_directive(args or {})
     if tool_name == "proton_drive_share":
         path = str((args or {}).get("path") or "").strip()
         return {
@@ -998,7 +1227,7 @@ def handle_get_attachment(args: dict[str, Any], **_kw: Any) -> str:
     except (ProtonError, ValueError) as exc:
         return f"Proton error: {exc}"
 
-    dest_dir = Path(default_root()) / "attachments" / _safe_name(message_id)
+    dest_dir = _root() / "attachments" / _safe_name(message_id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     path = dest_dir / _safe_name(fname)
     path.write_bytes(data)
@@ -1329,10 +1558,32 @@ def _followup_prompt(*, about, conv, participants, domain, topic, account, snaps
 
 
 def handle_schedule_followup(args: dict[str, Any], **_kw: Any) -> str:
+    # Scheduling from inside a scheduled run is the one path that walks around
+    # `cron.allow_agent_scheduling`: that switch governs whether an agent may
+    # create jobs, and a job that creates jobs renews itself without anyone
+    # agreeing to it again. The run is read from Hermes, not from the model.
+    run = inside_cron()
+    if run is not None:
+        where = getattr(run, "job_name", "") or getattr(run, "job_id", "") or "a scheduled job"
+        return (
+            f"Refused: this is already running inside the scheduled job {where!r}, and a "
+            "scheduled run does not schedule more work -- that is what "
+            "cron.allow_agent_scheduling decides, and it is the person's switch. Report what "
+            "the follow-up found and let them schedule the next one."
+        )
+
     when = str(args.get("when") or "").strip()
     about = str(args.get("about") or "").strip()
     if not (when and about):
         return "I need when (the time to run) and about (what the follow-up is for)."
+    if len(about) > ABOUT_LIMIT:
+        # `about` is pasted into the prompt of a job that runs unattended, and
+        # a mailbox is where outside text arrives: a cap is cheap and the
+        # model can say it in fewer words.
+        return (
+            f"The `about` is {len(about):,} characters; keep it under {ABOUT_LIMIT:,}. "
+            "It is a short note about what the follow-up is for, not the thread itself."
+        )
 
     participants = [str(a).strip() for a in (args.get("participants") or []) if str(a).strip()]
     domain = str(args.get("domain") or "").strip().lstrip("@")
@@ -1364,14 +1615,6 @@ def handle_schedule_followup(args: dict[str, Any], **_kw: Any) -> str:
             f"Scheduling needs Hermes's cron, which is not available here ({exc}). This tool "
             "works when the plugin runs inside a Hermes gateway."
         )
-    origin = None
-    try:
-        from tools.cronjob_job_args import _origin_from_env
-
-        origin = _origin_from_env()
-    except Exception:  # pragma: no cover
-        origin = None
-
     prompt = _followup_prompt(
         about=about, conv=conv, participants=participants, domain=domain,
         topic=topic, account=account, snapshot=snapshot,
@@ -1381,8 +1624,10 @@ def handle_schedule_followup(args: dict[str, Any], **_kw: Any) -> str:
             prompt=prompt,
             schedule=when,
             repeat=1,
-            deliver="origin" if origin else "local",
-            origin=origin,
+            # Where it lands is core's to resolve: the private helper this
+            # used to import (`tools.cronjob_job_args._origin_from_env`) is
+            # not a plugin's to read.
+            deliver="origin",
             # Reading only: the scheduled run cannot send, delete, or schedule.
             enabled_toolsets=[TOOLSET],
             name=f"Proton follow-up: {about[:40]}",
@@ -1405,8 +1650,7 @@ def handle_schedule_followup(args: dict[str, Any], **_kw: Any) -> str:
                 prompt=_precheck_prompt(about=about, account=account, when_display=run_at),
                 schedule=precheck_at,
                 repeat=1,
-                deliver="origin" if origin else "local",
-                origin=origin,
+                deliver="origin",
                 enabled_toolsets=[TOOLSET],
                 name=f"Follow-up auth check: {about[:30]}",
             )
@@ -1418,11 +1662,10 @@ def handle_schedule_followup(args: dict[str, Any], **_kw: Any) -> str:
             precheck_note = ""
 
     anchor = f"conversation {conv}" if conv else f"topic {topic!r}/participants"
-    where = "" if origin else " Its result will be saved locally (no live channel to deliver to)."
     return (
         f"Scheduled a follow-up (job {job.get('id')}) for {run_at}, anchored on {anchor}. When it "
         "fires it will gather the thread (noting what is new since now), decide whether a reply is "
-        f"still needed, and send you a draft to approve -- it cannot send on its own.{precheck_note}{where}"
+        f"still needed, and send you a draft to approve -- it cannot send on its own.{precheck_note}"
     )
 
 
@@ -2072,7 +2315,7 @@ def handle_drive_download(args: dict[str, Any], **_kw: Any) -> str:
         )
     except ProtonError as exc:
         return f"Proton error: {exc}"
-    dest_dir = Path(default_root()) / "drive"
+    dest_dir = _root() / "drive"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / _safe_name(name)
     dest.write_bytes(data)
@@ -2120,7 +2363,9 @@ def handle_drive_create_folder(args: dict[str, Any], **_kw: Any) -> str:
 PROTON_DRIVE_UPLOAD_SCHEMA = _schema(
     "proton_drive_upload",
     "Upload a local file to Proton Drive (encrypted end-to-end). Give the local file path and the "
-    "destination folder path in Drive (empty for the top level); the name defaults to the file's.",
+    "destination folder path in Drive (empty for the top level); the name defaults to the file's. "
+    "A person approves each upload, and the prompt shows them the resolved local path, so ask for "
+    "the file by the path the person gave you rather than guessing at one.",
     {
         "local_path": {"type": "string", "description": "Path of the local file to upload."},
         "folder": {"type": "string", "description": "Destination folder in Drive (empty = top level)."},
@@ -2135,7 +2380,9 @@ def handle_drive_upload(args: dict[str, Any], **_kw: Any) -> str:
     raw_path = str(args.get("local_path") or "").strip()
     if not raw_path:
         return "Give the local_path of the file to upload."
-    path = Path(raw_path).expanduser()
+    # resolve(), like the approval prompt: the file a person approved is the
+    # file that is read.
+    path = Path(raw_path).expanduser().resolve()
     if not path.is_file():
         return f"File not found: {path}"
     size = path.stat().st_size

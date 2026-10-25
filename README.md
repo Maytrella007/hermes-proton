@@ -115,12 +115,18 @@ reads, never put in an environment variable, and never stored anywhere after
 sign-in. `proton_login` is also the one tool offered before a session exists,
 since gating it on a session would leave no way to create one.
 
-Sending stays off until you say who the agent may write to:
+Sending stays off until you say who the agent may write to. It is a setting, not
+a secret, so it lives with the plugin's other settings and belongs to the
+profile that set it:
 
 ```bash
-# in ~/.hermes/.env, then restart the gateway
-PROTON_ALLOWED_RECIPIENTS=you@example.com,*@your-company.com
+hermes plugins settings hermes-proton --set allowed_recipients='["you@example.com","*@your-company.com"]'
 ```
+
+or type it into the plugin's page in the Desktop app (Settings → Plugins →
+hermes-proton → Allowed recipients). `PROTON_ALLOWED_RECIPIENTS` in
+`~/.hermes/.env` is still read when the setting is empty, which is what the
+standalone `protonlite` CLI uses.
 
 `hermes proton status` prints the session, the addresses, the unread count and
 the current allowlist.
@@ -128,7 +134,10 @@ the current allowlist.
 ## More than one account
 
 Sign in as many times as you like; each account gets its own session file under
-`~/.config/protonlite/sessions/`. Every tool then takes an optional `account`.
+`<hermes home>/plugin-data/hermes-proton/sessions/`, which follows the active
+profile: two profiles are two sets of signed-in accounts. Every tool then takes
+an optional `account`. (`PROTONLITE_HOME` overrides it, and the standalone
+`protonlite` CLI keeps using `~/.config/protonlite`.)
 
 ```bash
 hermes proton accounts
@@ -161,8 +170,8 @@ protonlite send --to someone@example.com --subject "hi" --body "hello"
 ## What is stored, and what is not
 
 Each signed-in account has a session file
-(`~/.config/protonlite/sessions/<address>.json`, mode 0600) holding the access
-and refresh tokens plus the *salted key passphrase*.
+(`<hermes home>/plugin-data/hermes-proton/sessions/<address>.json`, mode 0600)
+holding the access and refresh tokens plus the *salted key passphrase*.
 
 **Your account password is never stored.** Keys are salted differently from the
 login handshake, so the passphrase in that file can decrypt your mail but cannot
@@ -178,7 +187,7 @@ page.
 An agent with these tools usually also has a shell. A recipient allowlist means
 a confused or manipulated agent can only mail people you nominated, which is a
 much smaller problem than one that can mail anyone. Reading is enabled as soon
-as a session exists; sending needs `PROTON_ALLOWED_RECIPIENTS`.
+as a session exists; sending needs the `allowed_recipients` setting.
 
 Note also what this deliberately is **not**: an inbound channel. Nothing here
 lets someone talk *to* the agent by sending it mail — a `From:` header is
@@ -201,11 +210,26 @@ injected instruction. The gate that does **not** depend on the model is this:
 `proton_send` is routed through Hermes's human-approval gate before it runs. The
 plugin registers a `pre_tool_call` hook that escalates every send, and Hermes
 asks a person to approve or deny it (`/approve`, `/deny`, or yes/no) showing the
-recipients, subject and attachment count. The gate runs **before** the handler
-and **fails closed** — with no one to approve (a non-interactive run), the send
-is blocked — so a confused, manipulated, or less capable model cannot send on
-its own. At the prompt you can choose *always* to pre-approve a given recipient,
-which is the "already approved" exception.
+recipients, the subject, and **every attachment by its resolved absolute path**.
+The gate runs **before** the handler and **fails closed** — with no one to
+approve (a non-interactive run), the send is blocked — so a confused,
+manipulated, or less capable model cannot send on its own. At the prompt you can
+choose *always* to pre-approve that recipient **with those files**, which is the
+"already approved" exception; a send with a different file is a different
+question and asks again.
+
+The paths are there for one reason. The prompt used to say "2 attachment(s)",
+so a person who had once answered *always* for a colleague had pre-approved any
+later send to them — and a send prompted by an injected mail could attach
+`~/.ssh/id_rsa` or `~/.hermes/.env` with nothing shown and nothing asked.
+
+The same hook asks about everything else that leaves the machine or cannot be
+undone: an event that emails invitations, an RSVP, a public Drive share link,
+**an upload of a local file** (shown with the path it is read from, since the
+Drive name is the model's to choose), a **permanent** delete, emptying Trash or
+Spam, and deleting a contact. A move to Trash, a trashed Drive item, a move, a
+rename and a label are recoverable and are not gated: a prompt for those teaches
+people to click through the ones that matter.
 
 The two gates compose: the allowlist bounds **who** may ever be written to, the
 approval gate bounds **whether** any particular send happens. Keep the allowlist
@@ -277,7 +301,7 @@ only read, decide, and hand you a draft.
   `proton_create_event` writes a new event (the title, place and notes encrypted
   to the calendar key, the timing signed in the clear so the server can file it).
   **Adding attendees emails each one an `.ics` invitation**, which is an outbound
-  send: attendees are held to the `PROTON_ALLOWED_RECIPIENTS` allowlist and the
+  send: attendees are held to the `allowed_recipients` allowlist and the
   create is routed through the same human-approval gate as `proton_send`. A
   private event (no attendees) is an internal write and is not gated.
 - **Answer an invitation with `proton_rsvp`.** Point it at the email that carries
