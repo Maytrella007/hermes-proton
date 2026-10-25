@@ -249,3 +249,27 @@ class AdoptingAnOlderInstall(unittest.TestCase):
             os.environ[tools.ROOT_ENV] = home
             with mock.patch.object(Path, "home", staticmethod(lambda: Path(fake_home))):
                 self.assertEqual(tools.adopt_legacy_sessions(), "")
+
+    def test_a_session_it_cannot_read_is_reported_and_not_swallowed(self) -> None:
+        # The case this was caught by, on a real host: the old session files
+        # belonged to root while the agent runs as another user, so they were
+        # never readable by the agent at all. Returning "" there says nothing
+        # about a mailbox that is about to look signed out.
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as fake_home:
+            legacy = self._host(home, fake_home)
+            (legacy / "root-owned.json").write_text("{}")
+            (legacy / "mine.json").write_text("{}")
+            real_copy = tools.shutil.copy2 if hasattr(tools, "shutil") else None
+            def refusing(src, dst):
+                if Path(src).name == "root-owned.json":
+                    raise PermissionError(13, "Permission denied")
+                return pathlib_copy(src, dst)
+            import shutil as _shutil
+            pathlib_copy = _shutil.copy2
+            with mock.patch.object(Path, "home", staticmethod(lambda: Path(fake_home))), \
+                 mock.patch.object(_shutil, "copy2", refusing):
+                said = tools.adopt_legacy_sessions()
+        self.assertIn("adopted 1", said)
+        self.assertIn("could not be read", said)
+        self.assertIn("root-owned.json", said)
+        self.assertIn("PermissionError", said)

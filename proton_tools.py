@@ -180,21 +180,40 @@ def adopt_legacy_sessions() -> str:
         now.mkdir(parents=True, exist_ok=True)
         import shutil
 
-        taken = []
+        taken, refused = [], []
         for session in found:
             target = now / session.name
             if target.exists():
                 continue
-            shutil.copy2(session, target)
-            target.chmod(0o600)
+            try:
+                shutil.copy2(session, target)
+                target.chmod(0o600)
+            except OSError as exc:
+                # One unreadable file is not the end of the list, and it is the
+                # case this was first caught by: on a real host those sessions
+                # belonged to root while the agent runs as another user, so
+                # they were never readable by the agent in the first place.
+                refused.append(f"{session.name} ({exc.__class__.__name__})")
+                target.unlink(missing_ok=True)
+                continue
             taken.append(session.stem)
-        if not taken:
+        if not (taken or refused):
             return ""
-        return (
-            f"hermes-proton: adopted {len(taken)} signed-in account(s) from {was} into "
-            f"{now} (the sessions now follow the active profile; the old files were left "
-            "in place)."
-        )
+        said = ""
+        if taken:
+            said = (
+                f"hermes-proton: adopted {len(taken)} signed-in account(s) from {was} into "
+                f"{now} (the sessions follow the active profile now; the old files were left "
+                "in place). "
+            )
+        if refused:
+            said += (
+                f"hermes-proton: {len(refused)} session file(s) in {was} could not be read and "
+                f"were left behind ({', '.join(refused)}) -- if they belong to another user, "
+                "they were never readable by this agent either, and the fix is to sign in as "
+                "the user the agent runs as: `hermes proton login`."
+            )
+        return said.strip()
     except Exception:  # pragma: no cover - never worth failing a load over
         return ""
 
