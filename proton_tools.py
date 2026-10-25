@@ -543,7 +543,7 @@ def handle_send(args: dict[str, Any], **_kw: Any) -> str:
     body, mime_type = htmltext.render_body(str(args.get("body") or ""), fmt)
 
     attachments: list[dict[str, Any]] = []
-    for raw in args.get("attachments") or []:
+    for raw in _as_list(args.get("attachments")):
         # An item is either a bare path, or {path, inline, cid} for an image
         # the HTML body embeds with <img src="cid:...">.
         spec = {"path": raw} if isinstance(raw, str) else dict(raw or {})
@@ -617,6 +617,34 @@ def handle_send(args: dict[str, Any], **_kw: Any) -> str:
     return f"{verb} from {_address_of(client)} {where} (id {sent.id})."
 
 
+def _one_line(text: Any, limit: int = 160) -> str:
+    """A model-written string, safe to put in a prompt a person reads.
+
+    Every line of an approval prompt except these values is written by this
+    plugin, so a value that can carry a newline can forge the rest of it. A
+    subject of `Invoice"\nAttaching 0 local file(s)...` printed a convincing
+    empty attachment list above the real one -- the real one was still there,
+    but a person reading quickly, or reading it in a chat window, approves
+    what they think they saw. Whitespace is collapsed and the value is cut.
+    """
+    said = " ".join(str(text or "").split())
+    return said if len(said) <= limit else said[: limit - 1] + "\u2026"
+
+
+def _as_list(value: Any) -> list:
+    """What the schema says is an array, however it arrived.
+
+    A bare string iterates one character at a time, which turned one path into
+    nine of them. Wrapping is also what the handler does with a bare path, so
+    the prompt and the send agree.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
 def attachment_paths(raw_list: Any) -> list[str]:
     """Every local file a send would read, as an absolute resolved path.
 
@@ -626,7 +654,7 @@ def attachment_paths(raw_list: Any) -> list[str]:
     was approved is what is sent.
     """
     paths: list[str] = []
-    for raw in raw_list or []:
+    for raw in _as_list(raw_list):
         spec = {"path": raw} if isinstance(raw, str) else dict(raw or {})
         where = str(spec.get("path") or "").strip()
         if where:
@@ -653,10 +681,10 @@ def send_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
     named by its resolved absolute path now, and a different file is a
     different question.
     """
-    to = [str(a) for a in (args.get("to") or [])]
-    cc = [str(a) for a in (args.get("cc") or [])]
-    bcc = [str(a) for a in (args.get("bcc") or [])]
-    subject = str(args.get("subject") or "")
+    to = [_one_line(a, 80) for a in _as_list(args.get("to"))]
+    cc = [_one_line(a, 80) for a in _as_list(args.get("cc"))]
+    bcc = [_one_line(a, 80) for a in _as_list(args.get("bcc"))]
+    subject = _one_line(args.get("subject"))
     files = attachment_paths(args.get("attachments"))
     parts = ["to " + (", ".join(to) or "(nobody)")]
     if cc:
@@ -690,9 +718,10 @@ def create_event_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
     the same split the labelling tools use. The recipients are shown and the
     rule_key is per-attendee-set, so "always" pre-approves that set.
     """
-    title = str(args.get("title") or "")
-    start = str(args.get("start") or "")
-    attendees = sorted({str(a).strip().lower() for a in (args.get("attendees") or []) if str(a).strip()})
+    title = _one_line(args.get("title"))
+    start = _one_line(args.get("start"), 40)
+    attendees = sorted({_one_line(a, 80).strip().lower()
+                        for a in _as_list(args.get("attendees")) if str(a).strip()})
     message = f'Create calendar event "{title}" at {start} and email an invitation to ' + ", ".join(attendees)
     return {
         "action": "approve",
@@ -711,10 +740,10 @@ def upload_approval_directive(args: dict[str, Any]) -> dict[str, Any]:
     the only moment where the file is still identifiable, and the key is per
     file and per destination.
     """
-    raw = str(args.get("local_path") or "").strip()
+    raw = _one_line(args.get("local_path"), 4096)
     where = str(Path(raw).expanduser().resolve()) if raw else "(no path)"
-    folder = str(args.get("folder") or "").strip()
-    name = str(args.get("name") or "").strip() or Path(where).name
+    folder = _one_line(args.get("folder"), 200)
+    name = _one_line(args.get("name"), 200) or Path(where).name
     destination = f"{folder.rstrip('/')}/{name}" if folder else name
     return {
         "action": "approve",
@@ -743,7 +772,7 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
     # about those would teach a person to click through the prompts that
     # matter. Nothing here is outbound; this is about what cannot be got back.
     if tool_name == "proton_delete" and (args or {}).get("permanent"):
-        ids = [str(i) for i in ((args or {}).get("ids") or [])]
+        ids = [_one_line(i, 40) for i in _as_list((args or {}).get("ids"))]
         return {
             "action": "approve",
             "message": (
@@ -753,7 +782,7 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
             "rule_key": "proton_delete:permanent",
         }
     if tool_name == "proton_empty":
-        folder = str((args or {}).get("folder") or "").strip().lower()
+        folder = _one_line((args or {}).get("folder"), 20).lower()
         return {
             "action": "approve",
             "message": f"Empty the whole {folder or '?'} folder in Proton Mail -- every message in "
@@ -761,7 +790,7 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
             "rule_key": f"proton_empty:{folder}",
         }
     if tool_name == "proton_delete_contact":
-        who = str((args or {}).get("name") or (args or {}).get("contact_id") or "?")
+        who = _one_line((args or {}).get("name") or (args or {}).get("contact_id") or "?", 80)
         return {
             "action": "approve",
             "message": f"Delete the Proton contact {who!r} for good (contacts have no trash)",
@@ -770,7 +799,7 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
     if tool_name == "proton_drive_upload":
         return upload_approval_directive(args or {})
     if tool_name == "proton_drive_share":
-        path = str((args or {}).get("path") or "").strip()
+        path = _one_line((args or {}).get("path"))
         return {
             "action": "approve",
             "message": f"Create a PUBLIC view link for {path!r} in Proton Drive (anyone with the URL can see it)",
@@ -779,7 +808,7 @@ def pre_tool_call_directive(tool_name: str, args: dict[str, Any] | None):
     if tool_name == "proton_rsvp":
         answer = str((args or {}).get("answer") or "").strip().lower()
         partstat = _calendar.RSVP_ANSWERS.get(answer, ("?", 0))[0]
-        message_id = str((args or {}).get("message_id") or "").strip()
+        message_id = _one_line((args or {}).get("message_id"), 80)
         return {
             "action": "approve",
             "message": f"Answer a calendar invitation as {partstat} and email the reply to its organizer",
